@@ -11,6 +11,7 @@ from app.models.float import Float
 from app.models.measurement import Measurement
 from app.models.profile import Profile
 from app.schemas.query import QueryRequest, QueryResponse
+from app.services.ai.service import FloatChatAIService
 
 router = APIRouter(tags=["Query & AI Integration"])
 
@@ -55,7 +56,7 @@ PARAM_MAP: Dict[str, str] = {
     summary="Multi-Criteria ARGO Query (AI-Ready)",
     description=(
         "Deterministic parametric query engine supporting spatial bounding-box, temporal, "
-        "depth, platform, and parameter filters. Decoupled and ready for future AI/LLM structured query integration."
+        "depth, platform, and parameter filters. Decoupled and integrated with FloatChatAI NLP intent parsing."
     ),
 )
 async def execute_query(
@@ -64,19 +65,30 @@ async def execute_query(
 ) -> QueryResponse:
     """
     Execute a dynamic multi-criteria search across ARGO floats, profiles, and physical/BGC measurements.
+    If natural_language_prompt is supplied, translates natural language into structured filters.
     """
+    ai_context: Optional[Dict[str, Any]] = None
+    effective_request = request
+
+    # 0. FloatChatAI Natural Language Translation Layer
+    if request.natural_language_prompt and request.natural_language_prompt.strip():
+        effective_request, ai_context = await FloatChatAIService.parse_query(
+            request.natural_language_prompt,
+            base_request=request,
+        )
+
     filters = []
 
     # 1. Float ID Filtering
-    if request.float_ids:
+    if effective_request.float_ids:
         # Match against Float table / Profile float_id
-        clean_float_ids = [fid.strip() for fid in request.float_ids if fid and fid.strip()]
+        clean_float_ids = [fid.strip() for fid in effective_request.float_ids if fid and fid.strip()]
         if clean_float_ids:
             filters.append(Profile.float_id.in_(clean_float_ids))
 
     # 2. Spatial Bounding Box Filtering (PostGIS spatial acceleration & coordinate bounding)
-    if request.bounding_box:
-        bbox = request.bounding_box
+    if effective_request.bounding_box:
+        bbox = effective_request.bounding_box
         # Coordinate bounds
         filters.append(Profile.latitude >= bbox.min_lat)
         filters.append(Profile.latitude <= bbox.max_lat)
@@ -99,25 +111,33 @@ async def execute_query(
         )
 
     # 3. Temporal Date Range Filtering
-    if request.start_date:
-        start_d = request.start_date.date() if isinstance(request.start_date, datetime) else request.start_date
+    if effective_request.start_date:
+        start_d = (
+            effective_request.start_date.date()
+            if isinstance(effective_request.start_date, datetime)
+            else effective_request.start_date
+        )
         filters.append(Profile.date >= start_d)
 
-    if request.end_date:
-        end_d = request.end_date.date() if isinstance(request.end_date, datetime) else request.end_date
+    if effective_request.end_date:
+        end_d = (
+            effective_request.end_date.date()
+            if isinstance(effective_request.end_date, datetime)
+            else effective_request.end_date
+        )
         filters.append(Profile.date <= end_d)
 
     # 4. Depth Range Filtering
-    if request.depth_range:
+    if effective_request.depth_range:
         min_depth = (
-            request.depth_range.get("min")
-            if "min" in request.depth_range
-            else request.depth_range.get("min_depth", request.depth_range.get("min_m"))
+            effective_request.depth_range.get("min")
+            if "min" in effective_request.depth_range
+            else effective_request.depth_range.get("min_depth", effective_request.depth_range.get("min_m"))
         )
         max_depth = (
-            request.depth_range.get("max")
-            if "max" in request.depth_range
-            else request.depth_range.get("max_depth", request.depth_range.get("max_m"))
+            effective_request.depth_range.get("max")
+            if "max" in effective_request.depth_range
+            else effective_request.depth_range.get("max_depth", effective_request.depth_range.get("max_m"))
         )
 
         if min_depth is not None:
@@ -127,9 +147,9 @@ async def execute_query(
 
     # 5. Parameter Canonicalization
     canonical_requested_params: Optional[Set[str]] = None
-    if request.parameters:
+    if effective_request.parameters:
         canonical_requested_params = set()
-        for p in request.parameters:
+        for p in effective_request.parameters:
             clean_p = p.strip()
             canonical_name = PARAM_MAP.get(clean_p.lower(), clean_p)
             canonical_requested_params.add(canonical_name)
@@ -149,8 +169,8 @@ async def execute_query(
     total_matched = (await db.execute(count_query)).scalar_one()
 
     # Pagination settings
-    limit = request.limit if request.limit is not None else 50
-    offset = request.offset if request.offset is not None else 0
+    limit = effective_request.limit if effective_request.limit is not None else 50
+    offset = effective_request.offset if effective_request.offset is not None else 0
 
     # Build Data Query
     data_query = (
@@ -227,22 +247,28 @@ async def execute_query(
         offset=offset,
         data=data_items,
         query_executed={
-            "float_ids": request.float_ids,
-            "bounding_box": request.bounding_box.model_dump() if request.bounding_box else None,
-            "start_date": request.start_date.isoformat() if request.start_date else None,
-            "end_date": request.end_date.isoformat() if request.end_date else None,
-            "parameters": request.parameters,
-            "depth_range": request.depth_range,
+            "float_ids": effective_request.float_ids,
+            "bounding_box": (
+                effective_request.bounding_box.model_dump()
+                if effective_request.bounding_box
+                else None
+            ),
+            "start_date": (
+                effective_request.start_date.isoformat()
+                if effective_request.start_date
+                else None
+            ),
+            "end_date": (
+                effective_request.end_date.isoformat()
+                if effective_request.end_date
+                else None
+            ),
+            "parameters": effective_request.parameters,
+            "depth_range": effective_request.depth_range,
             "limit": limit,
             "offset": offset,
         },
-        ai_context=(
-            {
-                "received_prompt": request.natural_language_prompt,
-                "status": "ready_for_ai_pipeline",
-            }
-            if request.natural_language_prompt
-            else None
-        ),
+        ai_context=ai_context,
     )
+
 

@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     DATABASE_URL: Union[str, None] = None
     ASYNC_DATABASE_URL: Union[str, None] = None
 
+    # AI / FloatChatAI Configuration
+    AI_PROVIDER: str = "auto"  # "auto", "openai", "gemini", "anthropic", "ollama", "fallback"
+    OPENAI_API_KEY: Union[str, None] = None
+    GEMINI_API_KEY: Union[str, None] = None
+    ANTHROPIC_API_KEY: Union[str, None] = None
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    LLM_MODEL: str = "gpt-4o-mini"
+
+
     @property
     def sync_database_uri(self) -> str:
         """Sync connection URI for Alembic and sync tools."""
