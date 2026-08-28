@@ -36,9 +36,12 @@ class QueryResponse(BaseModel):
     """Response envelope for custom queries."""
     total_matched: int = 0
     returned_count: int = 0
+    limit: Optional[int] = None
+    offset: Optional[int] = None
     data: List[Dict[str, Any]] = Field(default_factory=list)
     query_executed: Dict[str, Any] = Field(default_factory=dict)
     ai_context: Optional[Dict[str, Any]] = Field(
         None,
         description="Reserved context for future AI layer integration"
     )
+
